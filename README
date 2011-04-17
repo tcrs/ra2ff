@@ -1,0 +1,24 @@
+This package consists of the Red Alert 2 file format description and the C++
+programs I wrote to read the described formats.  See the introduction of the
+ra2ff.txt file for more info.
+
+The VXL renderer/animator is probably the most interesting part of this, it's
+very simple and slow, but hopefully the code is clear.
+
+# Requirements
+ - Linux with a compiler / GNU make (not tested windows)
+ - SDL, SDL_gfx and SDL_image
+
+The Exception header file uses variadic macros, which is not part of the C++
+standard (it's C99) so GCC will warn you about it.
+
+# Licence
+I have released this under the GPLv2 as I think it is compatible with the
+licences of all the open source projects which I used as a reference.  Different
+licence terms may be possible if required.
+
+# MiniLZO
+I've included the required files from MiniLZO to decompress the LZO compressed
+map sections.  MiniLZO is GPL licensed, see include/minilzo.h for more
+information.
+

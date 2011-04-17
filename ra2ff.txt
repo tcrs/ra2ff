@@ -1,0 +1,919 @@
+                    --- Red Alert 2 File Format Guide ---
+                                  - shiny -
+
+This document describes several of the file formats used by the "Command &
+Conquer: Red Alert 2" computer game by Westwood.  Note that some of the
+described formats have the same name as in other versions of C&C (TS, TD,
+etc.) - but many are different formats.
+
+****                        ----=| Thanks |=-----
+
+This document is mostly derived from other documents and program code.
+Therefore, without any of the following people/resources this document would
+not exist, many thanks to all of them.
+
+ - OS Voxel Tools / OS HVA Builder / OS SHP Tools
+    These are some fantastic modding tools written by:
+    - Banshee
+    - Stucuk
+    - Will
+    - Koen
+    - Plasmadroid
+    Find the latest versions & source code of the tools at:
+    - Project Perfect Mod (http://www.ppmsite.com/)
+    - CnC Source (http://cnc-source.com/)
+ - "Tiberian Sun Voxel Animation Format" Version 1.02
+    Written by:
+    - Eol (mosikos@online.no)
+    - DMZ (dmz@freeuk.com)
+    - Available at http://xhp.xwis.net/documents/VXL_Format.txt
+ - The XCC Tools source code & documentation
+   Written by
+   - Olaf van der Spek
+   Available at http://xhp.xwis.net/ along with lots of other TS/RA resources
+ - The ModEnc wiki has huge amounts of useful information (some of it's quite
+   well hidden ;p)
+   - http://www.modenc.renegadeprojects.com/
+ - The Red Alert File Formats Guide v1.4
+   - Written by Gavin Pugh
+   - Best description of the Format80 format around
+
+I do not intend to take credit for the majority of the information in this
+document, I've merely collected, clarified & tested it.
+
+You'll also notice that I have not documented the MIX file format - this
+format has been covered plenty in other documentation, and I'm not interested
+in writing a reader for it.
+
+****                       ----=| Versions |=-----
+
+2008-08-10 ................................................................. 1
+        - Initial write up (VXL / HVA / PAL)
+
+2008-08-14 ................................................................. 2
+        - Added SHP format (needs more research)
+
+2008-08-17 ................................................................. 3
+        - Added TMP format (basic info only)
+        - Added file type determination section
+
+2008-08-18 ................................................................. 4
+        - Realised that TMP format is complicated, and Olaf van der Spek's
+          document on the format is out of date - had to resort to the xcc
+          source code
+2008-08-19 ................................................................. 5
+        - Wrote up what I discovered about the TMP format from the xcc code,
+          mostly complete.
+        - Started work on map format, going is tough.
+2008-08-20 ................................................................. 6
+        - More work on map format, worked out from XCC code how to decompress
+          IsoMapPack5 & PreviewPack.  Need to work out Overlay*Pack.
+2008-08-21 ................................................................. 7
+        - Can decompress all packed sections in the map now
+        - Decompressed Overlay*Pack format.  Looks like it might be the same
+          as RA - one byte per tile in the map.
+        - Need to work out what tiles correspond to each ID in both
+          IsoMapPack5 and Overlay*Pack
+
+****                     -----=| Data widths |=------
+
+All multi-byte values stored in the files are stored little-endian (LSB first)
+
+A byte is 8 bits.
+A float is a 4-byte IEE754 floating point number (i.e. single precision)
+int8, int16, int32 , int64 are signed integers 8, 16, 32, and 64 bits wide
+uint8, uint16, uint32 , uint64 are unsigned integers 8, 16, 32, and 64 bits wide
+type[n] is an array of n 'type's
+type[n][m] is an 2d array of n x m 'type's, stored row-major (C-style)
+
+****                -----=| Determining file types |=-----
+
+There are several file types in RA2.  The main method of determining the file
+type is the file extension (which is what most of the types are named after).
+
+.vxl = VXL
+.hva = HVA
+.pal = PAL
+.shp = SHP
+.tem = SHP/TMP *
+.urb = SHP/TMP *
+.sno = SHP/TMP *
+.map = Map (stored as an INI file, with some Base64 encoded binary sections)
+
+* These files are theatre-specific, so the file extension is the theatre
+mnemonic.  This does add some confusion, as these files can be either SHPs or
+TMPs.  The best way I have found of determining which type they are is to
+check the first 16 bits of the file; if it is zero then the file is a SHP,
+otherwise it is a TMP.
+
+****                         -----=| VXL |=-----
+
+A vxl file contains a representation of a three-dimensional object, using a
+voxel representation.  A voxel is a "volumetric pixel,"  in the same way that
+a pixel represents a square in a two-dimensional image, a voxel represents a
+cube in a three-dimensional image.
+
+VXLFile {
+        header         : Header
+        sectionHeaders : SectionHeader[header.numSections]
+        -- The sectionData is header.bodySize bytes long
+        sectionData    : SectionData[header.numSections]
+        sectionTailers : SectionTailer[header.numSections]
+}
+
+Header {
+        -- Always equal to the string "Voxel Animation" (null-terminated)
+        fileType          : char[16]
+        -- Always seems to be equal to 1
+        unknown           : uint32
+        -- Number of sections this file contains
+        numSections       : uint32
+        -- Always the same as numSections
+        numSections2      : uint32
+        -- Total size (in bytes) of all data in the section bodies
+        bodySize          : uint32
+        -- Unsure exactly what these mean (TODO)
+        startPaletteRemap : uint8
+        endPaletteRemap   : uint8
+        -- Palette as packed RGB data.
+        -- NOTE: These channels are 8bits deep, not 6 like the PAL files.
+        palette           : uint8[256][3]
+}
+
+The bodySize field is very useful, if you skip this many bytes after the
+section headers, then you will be at the start of the section tailers, which
+contain information required to read the actual voxel data.
+
+A VXL file can contain any number of named 'Sections' (also called 'Limbs').
+Many of the RA2 vxls contain only one section.  I think the most complicated
+example is the hmec.vxl, which contains 13 sections.
+
+SectionHeader {
+        -- Name of this section (null-terminated)
+        name     : char[16]
+        -- Section number, always seems to monotonically increase from 0
+        number   : uint32
+        unknown  : uint32
+        unknown2 : uint32
+}
+
+SectionData {
+        -- NOTE: n = SectionTailer.xSize * SectionTailer.ySize
+
+        -- Offset into spanData to the start of each span
+        -- NOTE: if == -1 then the span is empty (and has no span data)
+        spanStart : int32[n]
+        -- Offset into spanData to the end of each span
+        -- NOTE: if == -1 then the span is empty (and has no span data)
+        spanEnd   : int32[n]
+        voxel     : VoxelSpan
+}
+
+VoxelSpan {
+        -- Variable number of span segments to make up a whole span
+        sections : VoxelSpanSegment[]
+}
+
+VoxelSpanSegment {
+        -- Number of empty voxels before this span segment
+        skip       : uint8
+        -- Number of voxels in this span segment
+        numVoxels  : uint8
+        -- The voxels in the span segment
+        voxels     : Voxel[numVoxels]
+        -- Always equal to numVoxels
+        numVoxels2 : uint8
+}
+
+Voxel {
+        -- The colour of the voxel (to be looked up in a palette)
+        colour : uint8
+        -- The normal vector of the voxel
+        normal : uint8
+}
+
+SectionTailer {
+        -- Offset from the end of headers to the SectionData.spanStart array
+        spanStartOffset : uint32
+        -- Offset from the end of headers to the SectionData.spanEnd array
+        spanEndOffset   : uint32
+        -- Offset from the end of headers to the SectionData.voxelSpan data
+        spanDataOffset  : uint32                      _
+        -- The scaling factor (always seems to be 0.083)
+        scale           : float
+        -- The default transformation matrix for the section
+        transform       : float[3][4]
+        -- The bounding box of the section
+        minBounds       : float[3]
+        maxBounds       : float[3]
+        -- The dimensions of the voxel object
+        xSize           : uint8
+        ySize           : uint8
+        zSize           : uint8
+        -- The type of normals (4 == Red Alert 2 normals)
+        normalType      : uint8
+}
+
+****            -----=| VXL · Reading the voxel spans |=-----
+
+Each voxel span represents a column of voxels, imagine a (SectionTailer.xSize x
+SectionTailer.ySize) two dimensional grid, each cell of the grid contains one
+column (span) of voxels, making a three dimensional block.  Some of the spans
+are empty, and most of the other spans have a number of invisible voxels (this
+is the purpose of the skip field in the VoxelSpanSegment).  These missing &
+invisible voxels carve the final three dimensional image out of the solid
+block.
+
+Each voxel span is made up of multiple span sections.  The skip field of a
+span section describes the distance between this section and the previous one,
+which is empty.  The number of span sections is variable, and is zero if the
+spanStart & spanEnd entries for the span equal -1.
+
+The best way to read the voxel span (as used in the OS Voxel Tools) is to keep
+count of the current z coordinate, and terminate as soon as it is greater than
+or equal to the SectionTailer.zSize:
+
+z    : uint8
+s    : uint8
+z = 0
+while(z != SectionTailer.zSize) {
+        with(VoxelSpanSegment[s]) {
+                input >> .skip
+                z += .skip
+                if(z >= SectionTailer.zSize) {
+                        break
+                }
+                input >> .numVoxels
+                if(z + .numVoxels > SectionTailer.zSize) {
+                        error()
+                }
+                for(i = 0 to .numVoxels - 1) {
+                        input >> .voxel[i].colour
+                        input >> .voxel[i].normal
+                        z++
+                }
+                input >> .numVoxels2
+                if(.numVoxels != .numVoxels2) {
+                        error()
+                }
+        }
+        s++
+}
+
+Some spans have a few bytes more data in them, but I assume it is just
+garbage.  However this means you have to seek to the spanStart offset before
+reading the span.
+
+****                    -----=| VXL · Normals |=------
+
+The normals in VXL files are stored a byte.  This byte is converted to a
+normal using a process that I do not understand.  There is a lookup table
+available in the OS Voxel Tools source code, and some normal tables on Olaf
+van der Spek's website.
+
+****                         -----=| HVA |=-----
+
+A hva file describes an animation for a vxl file.  In the RA2 mix files a vxl
+is always paired with a hva file of the same name (so hmec.vxl has hmec.hva).
+
+HVAFile {
+        header : Header
+        frames : Frame[header.numFrames]
+}
+
+Header {
+        -- Garbage, ignore (seems to be some part of a file path)
+        fileName     : char[16]
+        -- The number of frames the animation has
+        numFrames    : uint32
+        -- The number of sections that are animated
+        numSections  : uint32
+        -- The names of all the sections (null-terminated)
+        sectionNames : char[numSections][16]
+}
+
+Frame {
+        -- Transformation matrix for each section
+        matrices : TMatrix[header.numSections]
+}
+
+TMatrix {
+        -- The transformation matrix
+        matrix : float[3][4]
+}
+
+The Header.fileName seems to be the first part of a path name, probably
+something that was put in there by the conversion tool Westwood used.  It
+seems to be safe to ignore completely.
+
+The sectionNames correspond to the names in the VXL file.  You should really
+use the names associate a transformation matrix with a section in VXL, but all
+the vxl/hva pairs I've looked at have the sections in the same order.  So you
+can probably get away with just assuming that the second section in the HVA
+corresponds to the second section in the VXL etc.
+
+The HVA format is very simple, just note that the matrices are stored in
+section-fastest order.
+
+****            -----=| HVA · Transformation Matrices |=-----
+
+You will notice that the transformation matrices only have 3 rows, these are
+the top three rows in a 4x4 marix, the bottom row is [0 0 0 1].
+
+If you want to use these matrices with OpenGL then bear in mind that OpenGL
+expects column-major matrices (C arrays are row-major).  So if you have a
+16-element float array to pass to glMultMatrix, and you want to fill it in
+with one of the matrices from a HVA or VXL file:
+
+openGLMatrix[0]  = RA2Matrix[0][0]
+openGLMatrix[1]  = RA2Matrix[1][0]
+openGLMatrix[2]  = RA2Matrix[2][0]
+openGLMatrix[3]  = 0
+openGLMatrix[4]  = RA2Matrix[0][1]
+openGLMatrix[5]  = RA2Matrix[1][1]
+openGLMatrix[6]  = RA2Matrix[2][1]
+openGLMatrix[7]  = 0
+openGLMatrix[8]  = RA2Matrix[0][2]
+openGLMatrix[9]  = RA2Matrix[1][2]
+openGLMatrix[10] = RA2Matrix[2][2]
+openGLMatrix[11] = 0
+openGLMatrix[12] = RA2Matrix[0][3]
+openGLMatrix[13] = RA2Matrix[1][3]
+openGLMatrix[14] = RA2Matrix[2][3]
+openGLMatrix[15] = 1
+
+****              -----=| HVA · How to animate a VXL |=-----
+
+For each section you need to:
+
+- Calculate the ratio between screen units and voxels in all dimensions
+from the fields in the SectionTailer:
+
+sf : float[3]
+with(SectionTailer) {
+        sf[0] = (.maxBounds[0] - .minBounds[0]) / .xSize
+        sf[1] = (.maxBounds[1] - .minBounds[1]) / .ySize
+        sf[2] = (.maxBounds[2] - .minBounds[2]) / .zSize
+}
+
+This vector of scale factors is very important: you must scale all voxel
+coordinates by these values before drawing.  So if you want to draw voxel
+(x, y, z)
+then you would draw it at coordinates
+(x * sf[0], y * sf[1], z * sf[2])
+
+- Create your transformation matrix.  There are two cases here:
+-- Using a tranformation matrix from a HVA file
+The translation column of the matrix has to be scaled.  There are two scale
+factors that need to be applied; the SectionTailer.scale value and the sf
+vector calculated above:
+
+tm : float[3][4]
+tm = HVAFile.frames[currentFrame].matrices[currentSection]
+with(SectionTailer) {
+        tm[0][3] *= .scale * sf[0]
+        tm[1][3] *= .scale * sf[1]
+        tm[2][3] *= .scale * sf[2]
+}
+
+-- Using the transformation matrix from the VXL SectionTailer
+In this case the matrix is pre-scaled and can be used as-is.
+
+- Get the minimum bounds from the SectionTailer
+All voxel coordinates must be translated by these values, as this is the
+origin for the section.
+
+Example, using OpenGL:
+
+glPushMatrix()
+
+sf : float[3]
+with(VXL.SectionTailer) {
+        sf[0] = (.maxBounds[0] - .minBounds[0]) / .xSize
+        sf[1] = (.maxBounds[1] - .minBounds[1]) / .ySize
+        sf[2] = (.maxBounds[2] - .minBounds[2]) / .zSize
+}
+
+transform : float[16]
+with(HVA.frame[currentFrame].matrices[currentSection]) {
+        transform[0]  = .matrix[0][0]
+        transform[1]  = .matrix[1][0]
+        transform[2]  = .matrix[2][0]
+        transform[3]  = 0
+        transform[4]  = .matrix[0][1]
+        transform[5]  = .matrix[1][1]
+        transform[6]  = .matrix[2][1]
+        transform[7]  = 0
+        transform[8]  = .matrix[0][2]
+        transform[9]  = .matrix[1][2]
+        transform[10] = .matrix[2][2]
+        transform[11] = 0
+        transform[12] = .matrix[0][3] * VXL.SectionTailer.scale * sf[0]
+        transform[13] = .matrix[1][3] * VXL.SectionTailer.scale * sf[1]
+        transform[14] = .matrix[2][3] * VXL.SectionTailer.scale * sf[2]
+        transform[15] = 1
+}
+
+glMultMatrix(transform)
+
+with(VXL.SectionTailer) {
+        glTranslatef(.minBounds[0], .minBounds[1], .minBounds[2])
+}
+
+for(x = 0 to VXL.SectionTailer.xSize) {
+        for(y = 0 to VXL.SectionTailer.ySize) {
+                for(z = 0 to VXL.SectionTailer.zSize) {
+                        drawVoxel(x * sf[0], y * sf[1], z * sf[2])
+                }
+        }
+}
+
+glPopMatrix()
+
+****                         -----=| PAL |=-----
+
+Colour {
+        r : uint8
+        g : uint8
+        b : uint8
+}
+
+PALFile {
+        colours : Colour[256]
+}
+
+Palette files are used in most places that colours are used.  If a colour is
+represented as a uint8, then it needs to be looked up in a palette, which
+converts it into a three channel (RGB) colour value.
+
+NOTE: All colour channels in PAL files only have a depth of 6 - only the low 6
+bits of each channel are used.  Therefore to use these colours as 8bit per
+channel colours (e.g. in 24bit images/textures) you should shift the rgb
+values left 2, to place the 6 bits of colour information in the most
+significant bits of the 8bit channels.
+
+****                         -----=| SHP |=-----
+
+The shp files in Red Alert contain the majority of the two dimensional images.
+The urb, sno & tem files are a mixture of shp format files and tmp files.
+
+SHPFile {
+        header       : Header
+        imageHeaders : ImageHeader[header.numImages]
+        images       : Image[header.numImages]
+}
+
+Header {
+        -- Always zero (use this to recognise as a RA2 SHP format file, in the
+        -- TS SHP format this field is the number of images)
+        zero      : uint16
+        -- The 'virtual' width of the images
+        width     : uint16
+        -- The 'virtual' height of the images
+        height    : uint16
+        -- The number of images in the file
+        numImages : uint16
+}
+
+ImageHeader {
+        -- The position that this image is placed on the 'virtual' image
+        x               : uint16
+        y               : uint16
+        -- The size of this image
+        width           : uint16
+        height          : uint16
+        -- The type of compression used
+        compressionType : uint8
+        unknown         : uint8
+        unknown2        : uint16
+        unknown3        : uint32
+        zero            : uint32
+        -- Absolute file offset to the start of the image data
+        offset          : uint32
+}
+
+Image {
+        -- The length and meaning of the data depends on the compressionType
+        data : uint8[]
+}
+
+ImageType1 {
+        -- Raw 8 bits-per-pixel image data
+        raw : uint8[ImageHeader.width][ImageHeader.height]
+}
+
+ImageType2 {
+        ScanLine {
+                -- Length of scanline (ImageHeader.width + 2)
+                length : uint16
+                -- Raw 8 bits-per-pixel image data
+                line   : uint8[ImageHeader.width]
+        }
+        -- Image data divided into scanlines
+        scanlines : ScanLine[ImageHeader.height]
+}
+
+ImageType3 {
+        ScanLine {
+                -- Length of scanline (including these 2 bytes)
+                length : uint16
+                -- RLE-zero compressed 8 bits-per-pixel image data
+                line   : uint8[length - 2]
+        }
+        -- Image data divided into compressed scanlines
+        scanlines : ScanLine[ImageHeader.height]
+}
+
+****             -----=| SHP · Image Data Compression |=-----
+
+There are three different types of image compression in the RA2 SHP files.
+They are given the compressionType values of 1, 2, and 3.  Any other value is
+an error.
+
+Type 1 compression is uncompressed 8 bits-per-pixel image data.  There appears
+to be files that call this type 0.
+
+Type 2 compression is uncompressed data, but each scanline starts with a 16bit
+length value.
+
+Type 3 compression is the only compressionType that actually does any
+compression.  The image is divided into scanlines, which all start with uint16
+that specifies the length of the compressed scanline in bytes, including that
+2 byte value.  The scanlines are RLE-zero compressed - only runs of zero bytes
+are run-length-encoded.  All values except zeros are copied verbatim from the
+input stream.  When a zero is encountered, the next byte is the number of
+zeros in the run (so write that number of zeros to the output).
+
+cBytes : uint16
+b      : uint8
+for(i = 0 to imgHeaders[n].h - 1) {
+        /* Read number of bytes in scanline */
+        input >> cBytes
+        /* Take off the two bytes just read */
+        cBytes -= 2
+        while(cBytes > 0) {
+                input >> b
+                cBytes--
+                if(b != 0) {
+                        /* Copy non-zero bytes to output */
+                        output << b
+                } else {
+                        /* Read number of encoded zeros */
+                        input >> b
+                        cBytes--
+                        /* Write the specified number of zeros to output */
+                        for(j = 1 to b) {
+                                output << 0x00
+                        }
+                }
+        }
+}
+
+The output will contain raw 8 bits-per-pixel image data.
+
+****                 -----=| SHP · Drawing a shp |=-----
+
+Each image in the shp file can have a different size from the 'virtual' size
+specified in the file header.  To draw an image from a shp file the image
+should be drawn on an empty image of the 'virtual' size at the position
+specified in the ImageHeader (ImagerHeader.x, ImageHeader.y).  This produces
+homogeneously sized images, which will line up correctly for animations etc.
+
+****                         -----=| TMP |=-----
+
+The TMP files contain map 'templates.'  (Need more info on how these are
+used).
+
+In RA2 they have file extension urb, tem, or sno.  Beware though, some of
+these files are shp files.
+
+TMPFile {
+        header : Header
+}       tiles  : Tile[?]
+
+Header {
+        -- Width of template in tiles
+        tilesX     : uint32
+        -- Height of template in tiles
+        tilesY     : uint32
+        -- Width of tiles (in RA2 always == 60)
+        tileWidth  : uint32
+        -- Height of tiles (in RA2 always == 30)
+        tileHeight : uint32
+        -- Absolute file offset to start of tile data
+        -- If zero, then the tile is empty
+        offsets    : uint32[tilesX * tilesY]
+};
+
+Tile {
+        header : TileHeader
+        -- fixed length pixel data
+        -- NOTE: not a rectangular image - isometric tile
+        tile   : uint8[900]
+        -- Fixed length (?)height(?) map
+        height : uint8[900]
+        -- Variable size extra data
+        -- If has extra data then n = header.extraW * header.extraH
+        -- otherwise n = 0
+        extra  : uint8[n]
+}
+
+TileHeader {
+        -- Position of the tile in the template
+        x                : int32
+        y                : int32
+        -- Offset to extra data (? CHECK)
+        extraOffset      : uint32
+        -- Offset to height data (relative to start of header)
+        -- always == 952
+        zOffset          : uint32
+        -- Unknown (from XCC source)
+        -- always seems to be 0
+        extraZOffset     : uint32
+        -- Position that the extra data should be drawn
+        extraX           : int32
+        extraY           : int32
+        -- Size of extra data
+        extraW           : uint32
+        extraH           : uint32
+
+        -- Flags (bit set)
+        -- 0x00000001 => Has extra data
+        -- 0x00000002 => Has Z data (?Always true?)
+        -- 0x00000004 => Has damaged data (?What does this mean?)
+        -- other bits always seem to be 0xCDCDCDC8
+        flags            : uint32
+        -- Height of tile
+        height           : uint8
+        -- Type of the terrain (defined in rules.ini?)
+        terrainType      : uint8
+        -- Type of ramp (MEANING???)
+        rampType         : uint8
+
+        -- Affects the colour that this terrain is displayed on the radar
+        -- not sure exactly what the values mean
+        radarLeftCol     : uint8[3]
+        radarRightColour : uint8[3]
+
+        unknown          : uint8[3]
+};
+
+****                   -----=| TMP · The tiles |=-----
+
+Each tile lies in an isometric grid.  A single tile of the grid is laid out
+thus:
+
+      /| x                           ····                            
+       |                           ········                          
+       |                         ············                        
+       |                       ················                      
+       |                     ····················                    
+       |                   ························                  
+       |                 ····························                
+       |               ································              
+       |             ····································            
+       |           ········································          
+       |         ············································        
+       |       ················································      
+       |     ····················································    
+       |   ························································  
+    30px ····························································
+       |   ························································  
+       |     ····················································    
+       |       ················································      
+       |         ············································        
+       |           ········································          
+       |             ····································            
+       |               ································              
+       |                 ····························                
+       |                   ························                  
+       |                     ····················                    
+       |                       ················                      
+       |                         ············                        
+       |                           ········                          
+       |                             ····                            
+      \|                                                             
+         <---------------------------60px--------------------------->
+
+x - Tile origin (TileHeader.x, TileHeader.y)
+· - A single pixel
+
+Note that this diagram is distorted, as characters are taller than they are
+wide.  Each isometric grid cell is twice as wide as it is tall.
+
+Note that the bottom row of the tile is empty.
+
+The tile data is not rectangular, which is why there is only 900 bytes of data
+to fill a 30x60 pixel rectangle.  This is very important to remember when
+drawing the tile onto a rectangular image.  A simple way to draw an isometric
+tile onto a rectangular buffer is:
+
+width     : uint32
+pos       : uint32
+tileWidth : uint32
+
+width = 4
+-- Always 60 for RA2
+tileWidth = 60
+for(y = 0 to 28) {
+        pos = outStart + (tileWidth - width) / 2
+        copy(output[pos], TileData.tile[tilePos], width)
+        outStart += outWidth
+        if(y < 15) {
+                width += 4
+        } else {
+                width -= 4
+        }
+}
+
+Where output is the rectangular buffer, outStart is initially set to the
+origin of the tile in the buffer (the x in the diagram), and outWidth is the
+total width of the output buffer.
+
+All Y coordinates in the TileHeader (y & extraY) have to adjusted to take into
+account the height of the tile.  Each height unit is a single isometric grid y
+position upwards.  Bear in mind that these values increase as you move up the
+template - the opposite to most graphics coordinates (usually 0,0 in top
+left).  The easiest way to calculate the y offset in pixels for a tile is:
+
+offset = (maxHeight - TileHeader.height) * (Header.tileHeight / 2)
+
+where maxHeight is is maximum of all the height values in the template.  This
+formula flips the height to correspond with the graphics orientation, ensuring
+tiles with a higher height will be drawn above tiles with a lower height.
+Also note that one isometric grid y position is half the tileHeight, as
+demonstrated by this diagram:
+
+                                   Grid  Height
+                                  /\/\/\   3
+                                  \/\/\/   2
+                                  /\/\/\   1
+                                  \/\/\/   0
+
+****                 -----=| TMP · The extra data |=-----
+
+Each tile can have an arbitrary sized 'extra' image associated with it (the
+Extra data flag in the TileHeader.flags fields indicated whether this data is
+present).  This image is a simple rectangular image, with dimensions given in
+the TileHeader.  The position that the extra should be drawn at it also
+specified in the header, this is an absolute position, not relative to the
+tile.  Note that the y coordinate of the extra should be height adjusted in
+the same way as the tile y coordinate.
+
+****                -----=| TMP · The height data |=-----
+
+No idea what this means, the XCC code & documentation refers to it as 'z' or
+'height' data, so I assume it is some kind of height map.
+
+****                         -----=| Map |=-----
+
+The maps are stored as INI files.  This documentation will only cover the
+format of the binary data sections - all the other keys are documented
+extensively on ModEnc & Deezire's Editing Guide.  There are 4 sections that
+contain binary data: PreviewPack, IsoMapPack5, OverlayPack, and
+OverlayDataPack.
+
+Binary sections are stored Base64 encoded (see RFC4648), then split into 70
+character lines (the final line may be < 70 characters long), and each line
+is used as the value for an incrementing number key, e.g.
+
+[OverlayPack]
+1=lAgAIAACoqhQo6dQh5E8j5dEgIgxgogwh5E3LQAU4AAABs2xd0JFWU9WW3h8XeW/d8mxZe
+2=C8cLepWDnsACADfAEg0owAAAa+rmDcuGvJsWLNsXJtfGNNVFpCRFnbwIvlLRQqTARQNQOU
+3=m0aEjjkgBpwFWARAOlg6SABAAUgAQAFIAEABSABAAUgAQAFIAEABSABDAde1aCfoAQNLUl
+4=tRVFonlAdIPEgAVDxYBFAFSABAAUgAQAFIAEABSABAAUgAQAFIAEABSABAAUgAQAFIAEAB
+5=SABAAUgAQAFIAEABSABAAUgAQAFIAEABSABAAUgAQAFIAEABSABAAUgAQAFIAEABSABAAU
+6=gAQAFIAEABSABAAUgAQAFIAEABSABAAUgAQAFIAEABSABAAUgAQAFIAEABSABAAUgAQAFI
+7=AEABSABAAUgAQAFIAEABSABAAUgAQAFIAEABSABAAUgAQAFIAEABSABAAUgAQAFIAEABpD
+8=tQOydkBwNMVFpNT1knewXlvnNYBFAFSABAAUgAQAFIAEABSABAAUgAQAFIAEABSABAAUgA
+9=QAFIAEABSABAAUtCo6dQQAFYAUgAQAFIAEABSABAAUgAQAFIAEABSABAAUgAQAEqlwdZYl
+10=5UPAZOVVuFhWfjw4VIPEgAIPyUByBFZAdYNFM1jZY8VABIAFgBSABAAUgAQAFIAEABSABA
+11=AUgAQAFIAEABSABAAUgAQAEtlAcJU1hdT1Zcm5Vo5L95SDxIACDwlAcnZAcD2LdzdIFjSJ
+12=9PdlRZXCAtzA5IM0A0SABAASAV/A5AB1gHSABAAS2XB3h5X1gWvPJIPEgAIOSUBydkBwPS
+13=sW9qdWNYnQNWX11QV142Zwd9iC9Ib1grUCxIAEABSABAAUgAQAFIAEABSABAAUgAQAFIAE
+14=ABSABAAUgAQAFIAFAIA56mS4+XQSdEAEABSABIA0gAQAFIAEABSABAAUgAQAFIAEABSABA
+15=AUgAQAFIAEABKpcHUFhdIOrEFjBnB0xTWznMDlAyRDtIAEhvSABX53uEMVAsSABc=
+
+(Note the above is not a valid OverlayPack, just an example of what the data
+looks like)
+
+To decode, simply iterate sequentially over all the keys in the section, and
+append all the values together.  This will form a valid Base64 encoded block
+of binary data.  Remember that you can work out the length of the Base64
+decoded data by:
+
+outputLength = (inputLength / 4) * 3
+
+where inputLength is the length of the Base64 encoded data (always an integral
+multiple of 4), and outputLength is the length of the data once Base64
+decoded.  All the following sections assume that the data has already been
+extracted from the INI file and Base64 decoded.
+
+****                  -----=| Map · Pack format |=-----
+
+Once Base64 decoded the data is in the 'Pack' format (not sure where this name
+comes from, seems to be what XCC calls it).
+
+Pack {
+        -- Variable number of sections, just keep reading them until they
+        -- consume all the data
+        sections : PackSection[]
+}
+
+PackSection {
+        -- Length of the packedData
+        compressedLength   : uint16
+        -- Length of data when decompressed
+        uncompressedLength : uint16
+        -- Compressed data
+        packedData         : uint8[compressedLength]
+}
+
+The packed data is compressed using one of two compression methods depending
+on which INI section it is:
+
+LZO - IsoMapPack5 & PreviewPack
+Format80 - OverlayPack & OverlayDataPack
+
+To make the final binary each section of the pack must be decompressed using
+the appropriate method and concatenated together.
+
+****             -----=| Map · Pack compression · LZO |=-----
+
+In this case the packedData is compressed using the LZO1X algorithm (see
+http://www.oberhumer.com/opensource/lzo/).  There nice little library called
+minilzo that contains everything required to decompress the data. 
+
+****          -----=| Map · Pack compression · Format80 |=-----
+
+In this case the packedData is compressed using the somewhat complex Format80
+encoding used in the old (RA/TD) SHP files.  This format is so named as all
+Format80 encoded binaries end with the 0x80 byte.
+
+The Format80 encoding consists of 5 commands, and there are 3 operations that
+these commands can perform:
+
+ - Copy a number of bytes from a position in the output to the output (note
+   that these areas often overlap)
+   copy(number of bytes, position)
+ - Copy a number of bytes from the input to the output
+   copyFromIn(number of bytes)
+ - Write a number of copies of a specified byte to the output
+   fill(number of bytes, byte)
+
+The 5 commands are:
+                Command (binary)                           Operation
+10cc cccc                                             copyFromIn(c)
+1111 1110  cccc cccc  cccc cccc  wwww wwww            fill(c, w)
+0ccc rrrr  rrrr rrrr                                  copy(c + 3, outPos - r)
+11cc cccc  pppp pppp  pppp pppp                       copy(c + 3, p)
+1111 1111  cccc cccc  cccc cccc  pppp pppp pppp pppp  copy(c, p)
+
+outPos is the current position in the output buffer.
+
+A Format80 encoded block is always terminated by a 0x80 command (copy 0 bytes
+from input).
+
+I won't go into more detail about this format as an excellent explanation and
+example code is available in "The Red Alert File Formats Guide" by Gavin Pugh.
+
+****                  -----=| Map · PreviewPack |=-----
+
+PreviewPack {
+        -- Raw RGB image data
+        -- previewWidth & previewHeight can be read from the INI file
+        image : uint8[previewHeight * previewWidth][3]
+}
+
+The PreviewPack is the simplest of the sections addressed, once decompressed
+it is a raw 24bits-per-pixel RGB image.  The dimensions of the image are given
+in the [Preview] section (Size key).
+
+****                  -----=| Map · IsoMapPack5 |=-----
+
+IsoMapPack {
+        -- Defines each tile on the map
+        entries : IsoEntry[]
+}
+
+IsoEntry {
+        -- Position of tile (CHECK SIGNEDNESS)
+        x       : uint16
+        y       : uint16
+        -- ID of the tile
+        tile    : uint16
+        -- Padding
+        zero1   : uint8[2]
+        -- The subtile index
+        subTile : uint8
+        -- Z/Height value (Same meaning as TMP file?)
+        z       : uint8
+        -- Padding
+        zero2   : uint8
+}
+
+I don't know what ID corresponds to what tile yet.
+
+****                  -----=| Map · OverlayPack |=-----
+
+****                -----=| Map · OverlayDataPack |=-----
